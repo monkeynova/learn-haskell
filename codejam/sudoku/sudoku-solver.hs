@@ -10,12 +10,16 @@ arraySize a = foldl (+) 0 (map (\x -> 1) a)
 
 {-|
 
-Board Datastructure
+BoardEntry Datastructure
 
 |-}
 
 data BoardEntry = Unknown (Set.Set Int) | Known Int deriving Show
-data Board = Board { by_row::[[BoardEntry]] } deriving Show
+
+instance Eq BoardEntry where
+         Known x == Known y      = x == y
+         Unknown x == Unknown y  = x == y
+         _ == _                  = False
 
 knownVal :: BoardEntry -> Int
 knownVal (Known v) = v
@@ -28,6 +32,14 @@ isKnown (Known _) = True
 isMaybe :: BoardEntry -> Int -> Bool
 isMaybe (Known x) y = x == y
 isMaybe (Unknown set) x = Set.member x set
+
+{-|
+
+Board Datastructure
+
+|-}
+
+data Board = Board { by_row::[[BoardEntry]] } deriving Show
 
 buildWork :: [[Int]] -> Board
 buildWork b = Board (map (map (\x -> if x == 0 then Unknown (Set.fromList [1..9]) else Known x) ) b)
@@ -88,12 +100,23 @@ trySolveStep b step = let (collapsedBoard, didWork) = collapseKnown $ restrictBo
                               (onliedBoard, step)
 
 
-restrictBoard :: Board -> Board
-restrictBoard b = (restrictCols . restrictRows . restrictBoxes) b
+boardFold :: ([BoardEntry] -> [BoardEntry]) -> Board -> Board
+boardFold singleRowFn b = let byRowFn = \x -> Board $ map singleRowFn (by_row x)
+                              byColFn = uncolumnBoard . byRowFn . columnBoard
+                              byBoxFn = unboxBoard . byRowFn . boxBoard
+                          in
+                          boardFoldList b [ byBoxFn, byColFn, byRowFn ]
 
-restrictRows b = Board $ map restrictSingleRow (by_row b)
-restrictCols b = (uncolumnBoard . restrictRows . columnBoard) b
-restrictBoxes b = (unboxBoard . restrictRows . boxBoard) b
+boardFoldList :: Board -> [ (Board -> Board) ] -> Board
+boardFoldList b fnList = foldl (\x -> \y -> y x) b fnList
+
+didWorkFold :: (Board,Bool) -> (Board -> (Board,Bool)) -> (Board, Bool)
+didWorkFold (b,didwork) fn = let (newboard,newdid) = fn b
+                                 in
+                                 (newboard, newdid || didwork)
+
+restrictBoard :: Board -> Board
+restrictBoard = boardFold restrictSingleRow
 
 restrictSingleRow :: [BoardEntry] -> [BoardEntry]
 restrictSingleRow r = map (\x -> removeKnown x knownVals) r
@@ -123,11 +146,7 @@ collapseSingleKnown (Unknown set) = if Set.size set == 1
                                         (Unknown set, False)
 
 checkOnly :: Board -> Board
-checkOnly b = (checkOnlyCols . checkOnlyRows . checkOnlyBoxes) b
-
-checkOnlyRows b = Board $ map checkOnlySingleRow (by_row b)
-checkOnlyCols b = (uncolumnBoard . checkOnlyRows . columnBoard) b
-checkOnlyBoxes b = (unboxBoard . checkOnlyRows . boxBoard) b
+checkOnly = boardFold checkOnlySingleRow
 
 checkOnlySingleRow :: [BoardEntry] -> [BoardEntry]
 checkOnlySingleRow row = let singles = filter (\maybe -> arraySize( filter (\set -> isMaybe set maybe) row ) == 1) [1..9]
@@ -145,6 +164,25 @@ knownFromOnly (Unknown set) singles = let fromSingles = filter (\x -> Set.member
                                       else
                                           Unknown set
 
+checkPairs :: Board -> Board
+checkPairs = boardFold checkPairsSingleRow
+
+isPair :: BoardEntry -> Bool
+isPair (Known _) = False
+isPair (Unknown set) = Set.size set == 2
+
+checkPairsSingleRow :: [BoardEntry] -> [BoardEntry]
+checkPairsSingleRow row = let pairs = filter isPair row
+                          in
+                          if arraySize pairs == 2 && (pairs!!0) == (pairs!!1)
+                          then
+                              map (\x -> if x == (pairs!!0) then x else checkPairsRemove x (pairs!!0)) row
+                          else
+                              row
+
+checkPairsRemove :: BoardEntry -> BoardEntry -> BoardEntry
+checkPairsRemove (Unknown from) (Unknown toRemove) = Unknown $ foldr Set.delete from (Set.elems toRemove)
+checkPairsRemove from _ = from
 
 {-|
 
@@ -262,3 +300,5 @@ main = do
      else
         putStr $ showBoard maybeSolvedBoard
 
+     putStr $ "CheckPairs Board\n"
+     putStr $ showBoard (checkPairs maybeSolvedBoard)
