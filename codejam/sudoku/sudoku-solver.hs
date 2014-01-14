@@ -2,6 +2,7 @@ module Main where
 
 import qualified Data.Set as Set
 import Data.List (sort,transpose)
+import System.Environment
 import Text.ParserCombinators.Parsec
 
 {-|
@@ -38,7 +39,7 @@ boxRows rows = map concat $ boxRowsByRow rows
 
 boxRowsByRow :: [[BoardEntry]] -> [[[BoardEntry]]]
 boxRowsByRow [] = []
-boxRowsByRow rows = (boxRowsByCol (fst split)) ++ (boxRowsByRow (snd split))
+boxRowsByRow rows = (boxRowsByCol $ fst split) ++ (boxRowsByRow $ snd split)
              where split = splitAt 3 rows
 
 boxRowsByCol :: [[BoardEntry]] -> [[[BoardEntry]]]
@@ -49,19 +50,25 @@ boxRowsByCol rows = (map fst split):(boxRowsByCol (filter (\x -> (length x) > 0)
 unboxBoard :: Board -> Board
 unboxBoard = boxBoard -- own inverse?
 
+isSolved b = foldl (foldl (\x -> \y -> x && (isKnown y))) True (by_row b)
+
+
 {-|
 
 Board manipulation
 
 |-}
 
-solveBoard :: Board -> Board
-solveBoard b = if didWork
-               then
-                  solveBoard collapsedBoard
-               else
-                  collapsedBoard
-               where (collapsedBoard, didWork) = collapseKnown (restrictBoard b)
+solveBoard :: Board -> (Board, Int)
+solveBoard b = solveBoardStep b 1
+
+solveBoardStep :: Board -> Int -> (Board, Int)
+solveBoardStep b step = if didWork
+                        then
+                           solveBoardStep collapsedBoard (step + 1)
+                        else
+                           (collapsedBoard, step)
+                        where (collapsedBoard, didWork) = collapseKnown $ restrictBoard b
 
 restrictBoard :: Board -> Board
 restrictBoard b = (restrictCols . restrictRows . restrictBoxes) b
@@ -92,7 +99,7 @@ couldCollapseSingle (Unknown set) = Set.size set == 1
 
 collapseKnown :: Board -> (Board, Bool)
 collapseKnown b = (Board (map (map fst) r), foldl (foldl (\x -> \y -> x || (snd y))) False r)
-                where r = (map (map collapseSingleKnown) (by_row b))
+                where r = map (map collapseSingleKnown) (by_row b)
 
 collapseSingleKnown :: BoardEntry -> (BoardEntry, Bool)
 collapseSingleKnown (Known v) = (Known v, False)
@@ -136,22 +143,26 @@ Shower
 
 join s a = foldl (\x -> \y -> if x == "" then y else x ++ s ++ y) "" a
 
-showBoard b = showManyRows (by_row b)
+showBoard b = "---\n" ++ 
+              (showManyRows (by_row b))
 
 showManyRows :: [[BoardEntry]] -> [Char]
 showManyRows [] = []
-showManyRows rs = (join "\n" (map showRow (fst split))) ++
-                  "\n---\n" ++
+showManyRows rs = (join "" (map showRow (fst split))) ++
+                  "---\n" ++
                   (showManyRows (snd split))
              where split = splitAt 3 rs
 
 showRow :: [BoardEntry] -> [Char]
-showRow [] = []
-showRow r = (showRowBox (fst split)) ++ "  |  " ++ (showRow (snd split))
-        where split = splitAt 3 r
+showRow r = "|" ++ (showRowPieces r) ++ "\n"
+
+showRowPieces :: [BoardEntry] -> [Char]
+showRowPieces [] = []
+showRowPieces r = (showRowBox $ fst split) ++ "|" ++ (showRowPieces $ snd split)
+              where split = splitAt 3 r
 
 showRowBox :: [BoardEntry] -> [Char]
-showRowBox rb = join ", " (map showCol rb)
+showRowBox rb = " " ++ (join ", " (map showCol rb)) ++ " "
 
 showCol :: BoardEntry -> [Char]
 showCol (Known i) = show i
@@ -176,15 +187,22 @@ Main
 |-}
 
 main = do
+     args <- getArgs
      input <- getContents
      let parsedBoard = case parse parseInput "stdin"  input of
                        Left  err -> error $ "Input:\n" ++ show input ++ 
                                             "\nError:\n" ++ show err
                        Right result -> result
      let workBoard = buildWork parsedBoard
+     let (maybeSolvedBoard, steps) = solveBoard workBoard
+     let shouldDebug = any (\x -> x == "-d" || x == "--debug") args
 
-     putStrLn $ "Initial Board:\n" ++ showBoard workBoard
-     putStrLn $ "Solved? Board:\n" ++ showBoard (solveBoard workBoard)
-     --putStrLn $ "First Restrict:\n" ++ showBoard (restrictBoard workBoard)
-     --putStrLn $ "First Collapse:\n" ++ showBoard (collapseKnown (restrictBoard workBoard))
-     --putStrLn $ "Second Restrict:\n" ++ showBoard (restrictBoard (collapseKnown (restrictBoard workBoard)))
+     if shouldDebug
+     then do
+        putStrLn $ "Initial Board\n" ++ (showBoard workBoard)
+        putStr $ "Supposedly Solved Board\n" ++
+               "  steps=" ++ (show steps) ++ "\n" ++ 
+               "  solved=" ++ (show $ isSolved maybeSolvedBoard) ++ "\n" ++
+               (showBoard maybeSolvedBoard)
+     else
+        putStr $ showBoard maybeSolvedBoard
