@@ -5,6 +5,9 @@ import Data.List (sort,sortBy,transpose)
 import System.Environment
 import Text.ParserCombinators.Parsec
 
+none :: (a -> Bool) -> [a] -> Bool
+none fn list = all (\x -> not $ fn x) list 
+
 {-|
 
 BoardEntry Datastructure
@@ -25,20 +28,24 @@ instance Ord BoardEntry where
          Unknown x `compare` Known y = LT
 
 knownVal :: BoardEntry -> Maybe Int
-knownVal (Unknown v) = Nothing
-knownVal (Known v) = Just v
+knownVal e = case e of
+             Unknown _ -> Nothing
+             Known v -> Just v
 
 isKnown :: BoardEntry -> Bool
-isKnown (Unknown _) = False
-isKnown (Known _) = True
+isKnown e = case e of
+            Unknown _ -> False
+            Known _ -> True
 
 isMaybe :: BoardEntry -> Int -> Bool
-isMaybe (Known x) y = x == y
-isMaybe (Unknown set) x = Set.member x set
+isMaybe e v = case e of
+              Known x -> x == v
+              Unknown set -> Set.member v set
 
 unknownSet :: BoardEntry -> Maybe (Set.Set Int)
-unknownSet (Known _) = Nothing
-unknownSet (Unknown set) = Just set
+unknownSet e = case e of
+               Known x -> Nothing
+               Unknown set -> Just set
 
 {-|
 
@@ -64,14 +71,16 @@ boxRows :: [[BoardEntry]] -> [[BoardEntry]]
 boxRows rows = map concat $ boxRowsByRow rows
 
 boxRowsByRow :: [[BoardEntry]] -> [[[BoardEntry]]]
-boxRowsByRow [] = []
-boxRowsByRow rows = (boxRowsByCol $ fst split) ++ (boxRowsByRow $ snd split)
-             where split = splitAt 3 rows
+boxRowsByRow rows = case rows of
+                    [] -> []
+                    _ -> (boxRowsByCol $ fst split) ++ (boxRowsByRow $ snd split)
+                         where split = splitAt 3 rows
 
 boxRowsByCol :: [[BoardEntry]] -> [[[BoardEntry]]]
-boxRowsByCol [] = []
-boxRowsByCol rows = (map fst split):(boxRowsByCol (filter (\x -> (length x) > 0) (map snd split)))
-                    where split = map (splitAt 3) rows
+boxRowsByCol rows = case rows of
+                    [] -> []
+                    _ -> (map fst split):(boxRowsByCol (filter (\x -> (length x) > 0) (map snd split)))
+                         where split = map (splitAt 3) rows
 
 unboxBoard :: Board -> Board
 unboxBoard = boxBoard -- own inverse?
@@ -91,7 +100,10 @@ boardPosPairsCols ( row, row_pos ) = map (\x->let col=(fst x); col_pos=(snd x) i
 
 |-}
 
-data SolveReturn = SolveReturn { workBoard::Board, workSteps::Int, workGuesses::Int } deriving Show
+data SolveOptions = SolveOptions { optTryGuess::Bool } deriving Show
+data SolveReturn = SolveReturn { workBoard::Board, workSteps::Int, workGuesses::Int, workOptions::SolveOptions } deriving Show
+
+defaultSolveOptions = SolveOptions True
 
 
 {-|
@@ -100,14 +112,14 @@ Board manipulation
 
 |-}
 
-solveBoard :: Board -> SolveReturn
-solveBoard b = solveBoardStep (SolveReturn b 0 0)
+solveBoard :: Board -> SolveOptions -> SolveReturn
+solveBoard b opts = solveBoardStep (SolveReturn b 0 0 opts)
 
 solveBoardStep :: SolveReturn -> SolveReturn
 solveBoardStep work = let (maybeSolved, totalSteps) = trySolveStep (workBoard work) (workSteps work)
-                          newWork = SolveReturn maybeSolved totalSteps (workGuesses work)
+                          newWork = work{workBoard = maybeSolved, workSteps = totalSteps}
                       in
-                      if isSolved maybeSolved
+                      if isSolved maybeSolved || not (optTryGuess (workOptions work))
                       then
                           newWork
                       else
@@ -157,16 +169,15 @@ tryGuesses work = tryWithGuesses work (makeGuesses (workBoard work))
 data Guesses = Guesses { guessSet::(Set.Set Int), guessPos::(Int,Int) } deriving Show
 
 boardEntryToGuess :: (BoardEntry, (Int,Int)) -> Maybe Guesses
-boardEntryToGuess ((Known _),_) = Nothing
-boardEntryToGuess ((Unknown set),pos) = Just $ Guesses set pos
+boardEntryToGuess (e,pos) = case e of
+                            Known _ -> Nothing
+                            Unknown set -> Just $ Guesses set pos
 
 makeGuesses :: Board -> Maybe Guesses
 makeGuesses b = boardEntryToGuess (head $ sortBy guessOrder (boardPosPairs b))
---makeGuesses b = Nothing
 
 chainOrdering :: Ordering -> Ordering -> Ordering
-chainOrdering EQ order = order
-chainOrdering order _ = order
+chainOrdering order1 order2 = if order1 == EQ then order2 else order1
 
 guessOrder :: (BoardEntry,(Int,Int)) -> (BoardEntry,(Int,Int)) -> Ordering
 guessOrder ((Known _),_) ((Unknown _),_) = GT
@@ -178,19 +189,20 @@ solveReturnFold :: SolveReturn -> SolveReturn -> SolveReturn
 solveReturnFold a b = a{workGuesses = (workGuesses a) + (workGuesses b), workSteps = (workSteps a) + (workSteps b)}
 
 tryWithGuesses :: SolveReturn -> Maybe Guesses -> SolveReturn
-tryWithGuesses work Nothing = work
-tryWithGuesses work (Just g) = let guessBoards = makeGuessBoards (workBoard work) g
-                                   attempts = map solveBoard guessBoards
-                                   solved = filter (\x -> isSolved (workBoard x)) attempts
-                                   return = foldl solveReturnFold work{workGuesses = (workGuesses work) + 1} attempts
-                               in
-                               if length solved == 1
-                               then
-                                   let found = head solved
-                                   in
-                                   return{workBoard = (workBoard found)}
-                               else
-                                   return
+tryWithGuesses work guesses = case guesses of
+                              Nothing -> work
+                              Just g -> let guessBoards = makeGuessBoards (workBoard work) g
+                                            attempts = map (\x -> solveBoard x (workOptions work)) guessBoards
+                                            solved = filter (\x -> isSolved (workBoard x)) attempts
+                                            return = foldl solveReturnFold work{workGuesses = (workGuesses work) + 1} attempts
+                                        in
+                                        if length solved == 1
+                                        then
+                                            let found = head solved
+                                            in
+                                            return{workBoard = (workBoard found)}
+                                        else
+                                            return
   
 makeGuessBoards :: Board -> Guesses -> [Board]
 makeGuessBoards b guesses = map (applyGuess b (guessPos guesses)) (Set.toList $ guessSet guesses)
@@ -215,12 +227,14 @@ restrictSingleRow r = map (\x -> removeKnown x knownVals) r
                   where knownVals = map knownVal (filter isKnown r)
 
 removeKnown :: BoardEntry -> [Maybe Int] -> BoardEntry
-removeKnown (Known x) _ = Known x
-removeKnown (Unknown set) knownVals = Unknown (foldr removeKnownSingle set knownVals)
+removeKnown e knownVals = case e of
+                          Known x -> Known x
+                          Unknown set -> Unknown (foldr removeKnownSingle set knownVals)
 
 removeKnownSingle :: Maybe Int -> Set.Set Int -> Set.Set Int
-removeKnownSingle Nothing s = s
-removeKnownSingle (Just v) s = Set.delete v s
+removeKnownSingle single set = case single of
+                               Nothing -> set
+                               Just v -> Set.delete v set
 
 {-|
 
@@ -232,20 +246,22 @@ couldCollapse :: Board -> Bool
 couldCollapse b = any (any couldCollapseSingle) (by_row b)
 
 couldCollapseSingle :: BoardEntry -> Bool
-couldCollapseSingle (Known _) = False
-couldCollapseSingle (Unknown set) = Set.size set == 1
+couldCollapseSingle e = case e of
+                        Known _ -> False
+                        Unknown set -> Set.size set == 1
 
 collapseKnown :: Board -> (Board, Bool)
 collapseKnown b = (Board (map (map fst) r), any (any snd) r)
-                where r = map (map collapseSingleKnown) (by_row b)
+                  where r = map (map collapseSingleKnown) (by_row b)
 
 collapseSingleKnown :: BoardEntry -> (BoardEntry, Bool)
-collapseSingleKnown (Known v) = (Known v, False)
-collapseSingleKnown (Unknown set) = if Set.size set == 1
-                                    then
-                                        (Known (head (Set.toList set)),True)
-                                    else
-                                        (Unknown set, False)
+collapseSingleKnown e = case e of
+                        Known v -> (Known v, False)
+                        Unknown set -> if Set.size set == 1
+                                       then
+                                           (Known (head (Set.toList set)),True)
+                                       else
+                                           (Unknown set, False)
 
 {-|
 
@@ -262,15 +278,17 @@ checkOnlySingleRow row = let singles = filter (\maybe -> length ( filter (\set -
                          map (\x -> knownFromOnly x singles) row
 
 knownFromOnly :: BoardEntry -> [Int] -> BoardEntry
-knownFromOnly (Known x) _ = Known x
-knownFromOnly (Unknown set) [] = Unknown set
-knownFromOnly (Unknown set) singles = let fromSingles = filter (\x -> Set.member x set) singles
-                                      in
-                                      if length fromSingles == 1
-                                      then
-                                          Unknown (Set.fromList fromSingles) -- fromSingles should be a single entry
-                                      else
-                                          Unknown set
+knownFromOnly e singles = case e of
+                          Known x -> Known x
+                          Unknown set -> case singles of
+                                         [] -> Unknown set
+                                         _ -> let fromSingles = filter (\x -> Set.member x set) singles
+                                              in
+                                              if length fromSingles == 1
+                                              then
+                                                  Unknown (Set.fromList fromSingles) -- fromSingles should be a single entry
+                                              else
+                                                  Unknown set
 
 {-|
 
@@ -340,26 +358,29 @@ showBoard b = let formatWidths = colWidths b
 showBreak widths = "+" ++ (join "+" $ showBreakBox widths) ++ "+\n"
 
 showBreakBox :: [Int] -> [[Char]]
-showBreakBox [] = []
-showBreakBox widths = let split = splitAt 3 widths
-                      in
-                      [ "-" ++ (join "-" $ map (\x -> replicate x '-') (fst split)) ++ "-" ] ++ (showBreakBox (snd split))
+showBreakBox widths = case widths of
+                      [] -> []
+                      _ -> let split = splitAt 3 widths
+                           in
+                           [ "-" ++ (join "-" $ map (\x -> replicate x '-') (fst split)) ++ "-" ] ++ (showBreakBox (snd split))
 
 showManyRows :: [[BoardEntry]] -> [Int] -> [Char]
-showManyRows [] _ = []
-showManyRows rs widths = (join "" (map (\x -> showRow x widths) (fst split))) ++
-                       (showBreak widths) ++
-                       (showManyRows (snd split) widths)
-                       where split = splitAt 3 rs
+showManyRows rs widths = case rs of
+                         [] -> []
+                         _ -> (join "" (map (\x -> showRow x widths) (fst split))) ++
+                              (showBreak widths) ++
+                              (showManyRows (snd split) widths)
+                              where split = splitAt 3 rs
 
 showRow :: [BoardEntry] -> [Int] -> [Char]
 showRow r widths = "|" ++ (showRowPieces r widths) ++ "\n"
 
 showRowPieces :: [BoardEntry] -> [Int] -> [Char]
-showRowPieces [] _ = []
-showRowPieces r widths = (showRowBox (fst rowSplit) (fst widthSplit)) ++ "|" ++ (showRowPieces (snd rowSplit) (snd widthSplit))
-                       where rowSplit = splitAt 3 r
-                             widthSplit = splitAt 3 widths
+showRowPieces r widths = case r of
+                         [] -> []
+                         _ -> (showRowBox (fst rowSplit) (fst widthSplit)) ++ "|" ++ (showRowPieces (snd rowSplit) (snd widthSplit))
+                              where rowSplit = splitAt 3 r
+                                    widthSplit = splitAt 3 widths
 
 showRowBox :: [BoardEntry] -> [Int] -> [Char]
 showRowBox rb widths = " " ++ (join " " (map showColFmt (zip rb widths))) ++ " "
@@ -373,13 +394,14 @@ showCol :: BoardEntry -> [Char]
 showCol (Known i) = show i
 showCol (Unknown c) = (showColList . Set.toAscList) c
 
-showColList [] = "[X]"
-showColList [1,2,3,4,5,6,7,8,9] = "[*]"
-showColList a = if length a > 4
-                then
-                   "~" ++ (showColList (Set.toAscList (Set.difference (Set.fromList [1..9]) (Set.fromList a))))
-                else
-                   show a
+showColList a = case a of
+                [] -> "[X]"
+                [1,2,3,4,5,6,7,8,9] -> "[*]"
+                _ -> if length a > 4
+                     then
+                         "~" ++ (showColList (Set.toAscList (Set.difference (Set.fromList [1..9]) (Set.fromList a))))
+                     else
+                         show a
 
 colWidths :: Board -> [Int]
 colWidths b = map (maximum . map widthOfCol) (by_row $ columnBoard b)
@@ -400,8 +422,9 @@ main = do
                        Left  err -> error $ "Input:\n" ++ show input ++ 
                                             "\nError:\n" ++ show err
                        Right result -> result
-     let maybeSolved = solveBoard (buildWork parsedBoard)
      let shouldDebug = any (\x -> x == "-d" || x == "--debug") args
+     let shouldGuess = (True || any (\x -> x == "-g" || x == "--guess") args) && none (\x -> x == "--noguess") args
+     let maybeSolved = solveBoard (buildWork parsedBoard) defaultSolveOptions{optTryGuess = shouldGuess}
 
      if shouldDebug
      then do
