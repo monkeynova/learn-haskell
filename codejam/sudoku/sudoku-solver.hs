@@ -1,12 +1,9 @@
 module Main where
 
 import qualified Data.Set as Set
-import Data.List (sort,transpose)
+import Data.List (sort,sortBy,transpose)
 import System.Environment
 import Text.ParserCombinators.Parsec
-
--- This has to be in a utility somewhere...
-arraySize a = foldl (+) 0 (map (\x -> 1) a)
 
 {-|
 
@@ -21,9 +18,15 @@ instance Eq BoardEntry where
          Unknown x == Unknown y  = x == y
          _ == _                  = False
 
-knownVal :: BoardEntry -> Int
-knownVal (Known v) = v
-knownVal (Unknown v) = 0
+instance Ord BoardEntry where
+         Known x `compare` Known y = x `compare` y
+         Unknown x `compare` Unknown y = Set.size x `compare` Set.size y
+         Known x `compare` Unknown y = GT
+         Unknown x `compare` Known y = LT
+
+knownVal :: BoardEntry -> Maybe Int
+knownVal (Unknown v) = Nothing
+knownVal (Known v) = Just v
 
 isKnown :: BoardEntry -> Bool
 isKnown (Unknown _) = False
@@ -32,6 +35,10 @@ isKnown (Known _) = True
 isMaybe :: BoardEntry -> Int -> Bool
 isMaybe (Known x) y = x == y
 isMaybe (Unknown set) x = Set.member x set
+
+unknownSet :: BoardEntry -> Maybe (Set.Set Int)
+unknownSet (Known _) = Nothing
+unknownSet (Unknown set) = Just set
 
 {-|
 
@@ -71,6 +78,21 @@ unboxBoard = boxBoard -- own inverse?
 
 isSolved b = foldl (foldl (\x -> \y -> x && (isKnown y))) True (by_row b)
 
+boardPosPairs :: Board -> [ (BoardEntry, (Int,Int)) ]
+boardPosPairs b = concat $ map boardPosPairsCols (boardPosPairsRows b)
+
+boardPosPairsRows :: Board -> [ ([BoardEntry], Int) ]
+boardPosPairsRows b = zip (by_row b) [0..8]
+
+boardPosPairsCols :: ( [BoardEntry], Int ) -> [ (BoardEntry,(Int,Int)) ]
+boardPosPairsCols ( row, row_pos ) = map (\x->let col=(fst x); col_pos=(snd x) in (col,(row_pos,col_pos))) $ zip row [0..8]
+
+{-|
+
+|-}
+
+data SolveReturn = SolveReturn { workBoard::Board, workSteps::Int, workGuesses::Int } deriving Show
+
 
 {-|
 
@@ -78,11 +100,19 @@ Board manipulation
 
 |-}
 
-solveBoard :: Board -> (Board, Int)
-solveBoard b = solveBoardStep b 1
+solveBoard :: Board -> SolveReturn
+solveBoard b = solveBoardStep (SolveReturn b 0 0)
 
-solveBoardStep :: Board -> Int -> (Board, Int)
-solveBoardStep b step = trySolveStep b step
+solveBoardStep :: SolveReturn -> SolveReturn
+solveBoardStep work = let (maybeSolved, totalSteps) = trySolveStep (workBoard work) (workSteps work)
+                          newWork = SolveReturn maybeSolved totalSteps (workGuesses work)
+                      in
+                      if isSolved maybeSolved
+                      then
+                          newWork
+                      else
+                          tryGuesses newWork
+
 
 trySolveStep :: Board -> Int -> (Board, Int)
 trySolveStep b step = let (collapsedBoard, didWork) = collapseKnown $ restrictBoard b
@@ -91,13 +121,13 @@ trySolveStep b step = let (collapsedBoard, didWork) = collapseKnown $ restrictBo
                       then
                           trySolveStep collapsedBoard (step + 1)
                       else
-                          let (onliedBoard, didWork) = collapseKnown $ checkOnly collapsedBoard
+                          let (onliedBoard, didWork2) = collapseKnown $ checkOnly collapsedBoard
                           in
-                          if didWork
+                          if didWork2
                           then
                               trySolveStep onliedBoard (step + 1)
                           else
-                              (onliedBoard, step)
+                              (onliedBoard, step + 1)
 
 
 boardFold :: ([BoardEntry] -> [BoardEntry]) -> Board -> Board
@@ -115,6 +145,68 @@ didWorkFold (b,didwork) fn = let (newboard,newdid) = fn b
                                  in
                                  (newboard, newdid || didwork)
 
+{-|
+
+guess -- find the smallest (Unknown set) on the board and try all values. then recursively solve
+
+|-}
+
+tryGuesses :: SolveReturn -> SolveReturn
+tryGuesses work = tryWithGuesses work (makeGuesses (workBoard work))
+
+data Guesses = Guesses { guessSet::(Set.Set Int), guessPos::(Int,Int) } deriving Show
+
+boardEntryToGuess :: (BoardEntry, (Int,Int)) -> Maybe Guesses
+boardEntryToGuess ((Known _),_) = Nothing
+boardEntryToGuess ((Unknown set),pos) = Just $ Guesses set pos
+
+makeGuesses :: Board -> Maybe Guesses
+makeGuesses b = boardEntryToGuess (head $ sortBy guessOrder (boardPosPairs b))
+--makeGuesses b = Nothing
+
+chainOrdering :: Ordering -> Ordering -> Ordering
+chainOrdering EQ order = order
+chainOrdering order _ = order
+
+guessOrder :: (BoardEntry,(Int,Int)) -> (BoardEntry,(Int,Int)) -> Ordering
+guessOrder ((Known _),_) ((Unknown _),_) = GT
+guessOrder ((Unknown _),_) ((Known _),_) = LT
+guessOrder ((Known v1),(x1,y1)) ((Known v2,(x2,y2))) = foldl chainOrdering EQ [v1 `compare` v2, x1 `compare` x2, y1 `compare` y2]
+guessOrder ((Unknown s1),(x1,y1)) ((Unknown s2,(x2,y2))) = foldl chainOrdering EQ [(Set.size s1) `compare` (Set.size s2), x1 `compare` x2, y1 `compare` y2]
+
+solveReturnFold :: SolveReturn -> SolveReturn -> SolveReturn
+solveReturnFold a b = a{workGuesses = (workGuesses a) + (workGuesses b), workSteps = (workSteps a) + (workSteps b)}
+
+tryWithGuesses :: SolveReturn -> Maybe Guesses -> SolveReturn
+tryWithGuesses work Nothing = work
+tryWithGuesses work (Just g) = let guessBoards = makeGuessBoards (workBoard work) g
+                                   attempts = map solveBoard guessBoards
+                                   solved = filter (\x -> isSolved (workBoard x)) attempts
+                                   return = foldl solveReturnFold work{workGuesses = (workGuesses work) + 1} attempts
+                               in
+                               if length solved == 1
+                               then
+                                   let found = head solved
+                                   in
+                                   return{workBoard = (workBoard found)}
+                               else
+                                   return
+  
+makeGuessBoards :: Board -> Guesses -> [Board]
+makeGuessBoards b guesses = map (applyGuess b (guessPos guesses)) (Set.toList $ guessSet guesses)
+
+applyGuess :: Board -> (Int,Int) -> Int -> Board
+applyGuess b (x_pos,y_pos) v = let rowSplit = splitAt x_pos (by_row b)
+                                   colSplit = splitAt y_pos (head $ snd rowSplit)
+                               in
+                               Board $ (fst rowSplit) ++ [(fst colSplit) ++ [ Known v ] ++ (tail $ snd colSplit)] ++ (tail $snd rowSplit)
+
+{-|
+
+restrictBoard -- take (Known x) out if (Unknown set) by row/col/box
+
+|-}
+
 restrictBoard :: Board -> Board
 restrictBoard = boardFold restrictSingleRow
 
@@ -122,9 +214,19 @@ restrictSingleRow :: [BoardEntry] -> [BoardEntry]
 restrictSingleRow r = map (\x -> removeKnown x knownVals) r
                   where knownVals = map knownVal (filter isKnown r)
 
-removeKnown :: BoardEntry -> [Int] -> BoardEntry
+removeKnown :: BoardEntry -> [Maybe Int] -> BoardEntry
 removeKnown (Known x) _ = Known x
-removeKnown (Unknown set) knownVals = Unknown (foldr Set.delete set knownVals)
+removeKnown (Unknown set) knownVals = Unknown (foldr removeKnownSingle set knownVals)
+
+removeKnownSingle :: Maybe Int -> Set.Set Int -> Set.Set Int
+removeKnownSingle Nothing s = s
+removeKnownSingle (Just v) s = Set.delete v s
+
+{-|
+
+collapseKnown -- turn (Unknown (Set.singleton x)) into (Known x)
+
+|-}
 
 couldCollapse :: Board -> Bool
 couldCollapse b = any (any couldCollapseSingle) (by_row b)
@@ -141,15 +243,21 @@ collapseSingleKnown :: BoardEntry -> (BoardEntry, Bool)
 collapseSingleKnown (Known v) = (Known v, False)
 collapseSingleKnown (Unknown set) = if Set.size set == 1
                                     then
-                                        (Known ((Set.toList set)!!0),True)
+                                        (Known (head (Set.toList set)),True)
                                     else
                                         (Unknown set, False)
+
+{-|
+
+checkOnly -- find instances where there is only one (Unknown x) by box/col/row that contains a given value
+
+|-}
 
 checkOnly :: Board -> Board
 checkOnly = boardFold checkOnlySingleRow
 
 checkOnlySingleRow :: [BoardEntry] -> [BoardEntry]
-checkOnlySingleRow row = let singles = filter (\maybe -> arraySize( filter (\set -> isMaybe set maybe) row ) == 1) [1..9]
+checkOnlySingleRow row = let singles = filter (\maybe -> length ( filter (\set -> isMaybe set maybe) row ) == 1) [1..9]
                          in
                          map (\x -> knownFromOnly x singles) row
 
@@ -158,11 +266,17 @@ knownFromOnly (Known x) _ = Known x
 knownFromOnly (Unknown set) [] = Unknown set
 knownFromOnly (Unknown set) singles = let fromSingles = filter (\x -> Set.member x set) singles
                                       in
-                                      if arraySize( fromSingles ) == 1
+                                      if length fromSingles == 1
                                       then
                                           Unknown (Set.fromList fromSingles) -- fromSingles should be a single entry
                                       else
                                           Unknown set
+
+{-|
+
+checkPairs -- find instances where [a,b] is in a box/col/row twice and remove a and b from the other (Unknown set)s
+
+|-}
 
 checkPairs :: Board -> Board
 checkPairs = boardFold checkPairsSingleRow
@@ -174,9 +288,9 @@ isPair (Unknown set) = Set.size set == 2
 checkPairsSingleRow :: [BoardEntry] -> [BoardEntry]
 checkPairsSingleRow row = let pairs = filter isPair row
                           in
-                          if arraySize pairs == 2 && (pairs!!0) == (pairs!!1)
+                          if length pairs == 2 && (pairs!!0) == (pairs!!1)
                           then
-                              map (\x -> if x == (pairs!!0) then x else checkPairsRemove x (pairs!!0)) row
+                              map (\x -> if x == (head pairs) then x else checkPairsRemove x (head pairs)) row
                           else
                               row
 
@@ -253,7 +367,7 @@ showRowBox rb widths = " " ++ (join " " (map showColFmt (zip rb widths))) ++ " "
 showColFmt :: (BoardEntry,Int) -> [Char]
 showColFmt (e,w) = let shown = showCol e
                    in
-                   shown ++ (replicate (w - (arraySize shown)) ' ')
+                   shown ++ (replicate (w - (length shown)) ' ')
 
 showCol :: BoardEntry -> [Char]
 showCol (Known i) = show i
@@ -261,7 +375,7 @@ showCol (Unknown c) = (showColList . Set.toAscList) c
 
 showColList [] = "[X]"
 showColList [1,2,3,4,5,6,7,8,9] = "[*]"
-showColList a = if arraySize a > 4
+showColList a = if length a > 4
                 then
                    "~" ++ (showColList (Set.toAscList (Set.difference (Set.fromList [1..9]) (Set.fromList a))))
                 else
@@ -271,7 +385,7 @@ colWidths :: Board -> [Int]
 colWidths b = map (maximum . map widthOfCol) (by_row $ columnBoard b)
 
 widthOfCol :: BoardEntry -> Int
-widthOfCol b = arraySize (showCol b)
+widthOfCol b = length $ showCol b
 
 {-|
 
@@ -286,19 +400,16 @@ main = do
                        Left  err -> error $ "Input:\n" ++ show input ++ 
                                             "\nError:\n" ++ show err
                        Right result -> result
-     let workBoard = buildWork parsedBoard
-     let (maybeSolvedBoard, steps) = solveBoard workBoard
+     let maybeSolved = solveBoard (buildWork parsedBoard)
      let shouldDebug = any (\x -> x == "-d" || x == "--debug") args
 
      if shouldDebug
      then do
-        putStrLn $ "Initial Board\n" ++ (showBoard workBoard)
+        putStrLn $ "Initial Board\n" ++ (showBoard $ buildWork parsedBoard)
         putStr $ "Supposedly Solved Board\n" ++
-               "  steps=" ++ (show steps) ++ "\n" ++ 
-               "  solved=" ++ (show $ isSolved maybeSolvedBoard) ++ "\n" ++
-               (showBoard maybeSolvedBoard)
+               "  steps=" ++ (show (workSteps maybeSolved)) ++ "\n" ++ 
+               "  guesses=" ++ (show (workGuesses maybeSolved)) ++ "\n" ++ 
+               "  solved=" ++ (show $ isSolved (workBoard maybeSolved)) ++ "\n" ++
+               (showBoard $ workBoard maybeSolved)
      else
-        putStr $ showBoard maybeSolvedBoard
-
-     putStr $ "CheckPairs Board\n"
-     putStr $ showBoard (checkPairs maybeSolvedBoard)
+        putStr $ showBoard (workBoard maybeSolved)
