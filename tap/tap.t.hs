@@ -14,11 +14,13 @@ mainTests = do
             subtest (Just "subtest-pass") ( do
                     plan NoPlan
                     TAP.pass $ Just "subtest sub-pass"
+                    note "subtest note"
                )
             subtest (Just "subtest-fail") ( do
                     plan $ Tests 3
                     TAP.pass $ Just "subtest sub-pass"
                     TAP.fail $ Just "subtest sub-fail"
+                    diag "subtest diag"
                )
 
-main = run_tests mainTests 
+main = runTests mainTests 
