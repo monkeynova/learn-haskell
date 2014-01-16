@@ -1,4 +1,4 @@
-module TAP (TAP.pass,TAP.fail,is,done_testing,subtest,run_tests) where
+module TAP (TAP.pass,TAP.fail,is,isnt,note,diag,done_testing,subtest,run_tests) where
 
 import Control.Monad.RWS
 
@@ -35,6 +35,11 @@ fail msg = do
            tell [ "not ok " ++ (show $ curTestNum state) ++ showMsg msg ]
            return False
        
+note :: String -> RWS () [String] TestState ()
+note msg = do
+           tell [ "# " ++ msg ]
+           return ()
+
 diag :: String -> RWS () [String] TestState ()
 diag msg = do
            tell [ "# " ++ msg ]
@@ -52,13 +57,17 @@ is got expect msg = do
                         diag $ "    expected = '" ++ (show expect) ++ "'"
                         return False
 
-isnt :: Eq a => a -> a -> Maybe String -> RWS () [String] TestState Bool
+isnt :: (Eq a,Show a) => a -> a -> Maybe String -> RWS () [String] TestState Bool
 isnt got expect msg = do
                       if not( got == expect )
                       then
                           TAP.pass msg
                       else    
-                          TAP.fail msg
+                        do
+                        TAP.fail msg
+                        diag $ "         got = '" ++ (show got) ++ "'"
+                        diag $ "    expected = anything else"
+                        return False
 
 done_testing :: RWS () [String] TestState Bool
 done_testing = do

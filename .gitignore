@@ -7,3 +7,6 @@ cabal-dev
 *.chi
 *.chs.h
 .virthualenv
+tap/tap.t
+codejam/sudoku/sudoku
+codejam/sudoku/sudoku-solver
