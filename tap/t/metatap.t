@@ -6,96 +6,206 @@ use warnings;
 use Test::More;
 
 use File::Temp qw( tempdir );
+use List::Util qw( max );
 
-is_haskell_tap( <<HASKELL, <<EXPECT, 'simple pass' );
-TAP.pass Nothing
-TAP.pass \$ Just "pass"
+is_haskell_tap( <<HASKELL, <<PERL, 'empty' );
 done_testing
 HASKELL
-ok 1
-ok 2 - pass
-1..2
-EXPECT
+done_testing
+PERL
 
-is_haskell_tap( <<HASKELL, <<EXPECT, 'simple fail' );
+is_haskell_tap( <<HASKELL, <<PERL, 'pass, noplan' );
+pass Nothing
+HASKELL
+pass
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'simple pass' );
+pass Nothing
+pass \$ Just "pass"
+done_testing
+HASKELL
+pass();
+pass( "pass" );
+done_testing();
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'simple fail' );
 TAP.fail Nothing
 TAP.fail \$ Just "fail"
 done_testing
 HASKELL
-not ok 1
-not ok 2 - fail
-1..2
-# Looks like you failed 2 tests of 2.
-EXPECT
+fail();
+fail( "fail" );
+done_testing();
+PERL
 
-is_haskell_tap( <<HASKELL, <<EXPECT, 'pass and fail' );
-TAP.pass \$ Just "pass"
+is_haskell_tap( <<HASKELL, <<PERL, 'pass and fail' );
+pass \$ Just "pass"
 TAP.fail \$ Just "fail"
 done_testing
 HASKELL
-ok 1 - pass
-not ok 2 - fail
-1..2
-# Looks like you failed 1 test of 2.
-EXPECT
+pass( "pass" );
+fail( "fail" );
+done_testing()
+PERL
 
-is_haskell_tap( <<HASKELL, <<EXPECT, 'ok' );
+is_haskell_tap( <<HASKELL, <<PERL, 'ok' );
 ok True \$ Just "pass"
 ok False \$ Just "fail"
 ok (1 == 1) Nothing
 done_testing
 HASKELL
-ok 1 - pass
-not ok 2 - fail
-ok 3
-1..3
-# Looks like you failed 1 test of 3.
-EXPECT
+ok( 1, "pass" );
+ok( undef, "fail" );
+ok( 1 == 1 );
+done_testing();
+PERL
 
-is_haskell_tap( <<HASKELL, <<EXPECT, 'is/isnt' );
-TAP.is 1 1 \$ Just "is pass"
-TAP.is 1 2 \$ Just "is fail"
-TAP.isnt 1 2 \$ Just "isnt pass"
-TAP.isnt 1 1 \$ Just "isnt fail"
+is_haskell_tap( <<HASKELL, <<PERL, 'is/isnt' );
+is 1 1 \$ Just "is pass"
+is 1 2 \$ Just "is fail"
+isnt 1 2 \$ Just "isnt pass"
+isnt 1 1 \$ Just "isnt fail"
 done_testing
 HASKELL
-ok 1 - is pass
-not ok 2 - is fail
-#          got: '1'
-#     expected: '2'
-ok 3 - isnt pass
-not ok 4 - isnt fail
-#          got: '1'
-#     expected: anything else
-1..4
-# Looks like you failed 2 tests of 4.
-EXPECT
+is( 1, 1, "is pass" );
+is( 1, 2, "is fail" );
+isnt( 1, 2, "isnt pass" );
+isnt( 1, 1, "isnt fail" );
+done_testing();
+PERL
 
-is_haskell_tap( <<HASKELL, <<EXPECT, 'or' );
-TAP.pass (Just "pass") `TAP.or` do diag "pass diag"
+is_haskell_tap( <<HASKELL, <<PERL, 'or' );
+pass (Just "pass") `TAP.or` do diag "pass diag"
 TAP.fail (Just "fail") `TAP.or` do diag "fail diag"
 done_testing
 HASKELL
-ok 1 - pass
-not ok 2 - fail
-# fail diag
-1..2
-# Looks like you failed 1 test of 2.
-EXPECT
+pass( "pass" ) or diag( "pass diag" );
+fail( "fail" ) or diag( "fail diag" );
+done_testing();
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'noplan' );
+plan NoPlan
+pass Nothing
+HASKELL
+plan 'no_plan';
+pass;
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'good plan' );
+plan \$ Tests 1
+pass Nothing
+HASKELL
+plan tests => 1;
+pass;
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'bad plan short' );
+plan \$ Tests 2
+pass Nothing
+HASKELL
+plan tests => 2;
+pass;
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'bad plan long' );
+plan \$ Tests 1
+pass Nothing
+pass Nothing
+HASKELL
+plan tests => 1;
+pass;
+pass;
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'double done - no intervening' );
+pass Nothing
+done_testing
+done_testing
+HASKELL
+pass;
+done_testing();
+done_testing();
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'double done - intervening pass' );
+pass Nothing
+done_testing
+pass Nothing
+done_testing
+HASKELL
+pass;
+done_testing();
+pass;
+done_testing();
+PERL
+
+is_haskell_tap( <<HASKELL, <<PERL, 'double done - intervening fail' );
+pass Nothing
+done_testing
+TAP.fail Nothing
+done_testing
+HASKELL
+pass;
+done_testing();
+fail;
+done_testing();
+PERL
 
 done_testing();
 
+sub diagf { my $fmt = shift; diag( sprintf $fmt, @_ ) }
+
 sub is_haskell_tap
 {
-    my ( $haskell, $expect, $message ) = @_;
+    my ( $haskell, $perl, $message ) = @_;
 
     my $tmpdir = tempdir( CLEANUP => 1 );
 
-    my $fname = "$tmpdir/tap.t.hs";
-    my $exe_fname = "$tmpdir/tap.t";
+    subtest $message => sub
+    {
+        my ( $got, $got_exit ) = run_haskell( $haskell, $tmpdir );
+        my ( $expect, $expect_exit ) = run_perl( $perl, $tmpdir );
 
-    open my $fh, '>', $fname
-      or return fail( "could not open $fname for writing: $!" );
+        my @got_lines = split /\n/, $got;
+        my @expect_lines = split /\n/, $expect;
+        my $linecount = max( $#got_lines, $#expect_lines );
+
+        is( $got_exit, $expect_exit, "exitval" );
+        ok( $got eq $expect, sprintf( "output (%d lines)", $linecount ) )
+            or do
+            {
+                my $max_got_width = max map { length } @got_lines;
+
+                my $fmt = "%${max_got_width}s %s %s";
+                diagf( $fmt, "HASKELL", '|', "PERL" );
+                for my $line ( 0 .. $linecount )
+                {
+                    my $got_line = $got_lines[$line] // '';
+                    my $expect_line = $expect_lines[$line] // '';
+                    diagf
+                    (
+                        $fmt,
+                        $got_line,
+                        ($got_line eq $expect_line ? '|' : '!'),
+                        $expect_line,
+                    );
+                }
+            };
+    };
+}
+
+sub run_haskell
+{
+    my ( $haskell, $tmpdir ) = @_;
+
+    my $exe_fname = "$tmpdir/tap.t";
+    my $hs_fname = "$tmpdir/tap.t.hs";
+
+    open my $hs_fh, '>', $hs_fname
+      or do { fail( "could not open $hs_fname for writing: $!" ); return; };
 
     $haskell =~ s/(^|\n)/$1            /g; # indent to "do"
 
@@ -110,26 +220,59 @@ $haskell
 main = runTests mainTests
 HASKELL
 
-    print {$fh} $haskell;
+    print {$hs_fh} $haskell;
 
-    close $fh
-      or return fail( "error closing $fname: $!" );
+    close $hs_fh
+      or do { fail( "error closing $hs_fname: $!" ); return; };
 
-    open my $compile_pipe, '-|', 'bash', '-c', "ghc $fname 2>&1"
-      or return fail( "can't open pipe 'ghc $fname'" );
+    open my $compile_pipe, '-|', 'bash', '-c', "ghc $hs_fname 2>&1"
+      or do { fail( "can't open pipe 'ghc $hs_fname'" ); return; };
 
     note( $_ ) while <$compile_pipe>;
 
-    $? == 0 or do { fail( "error compiling $fname" ); diag( $haskell ); return; };
+    $? == 0 or do { fail( "error compiling $hs_fname" ); diag( $haskell ); return; };
 
-    open my $run_pipe, '-|', 'bash', '-c', "$exe_fname 2>&1"
-      or return fail( "can't open pipe '$exe_fname'" );
+    open my $run_hs_pipe, '-|', 'bash', '-c', "$exe_fname 2>&1"
+      or do { fail( "can't open pipe '$exe_fname'" ); return; };
 
-    my $got = join '', <$run_pipe>;
+    my $output = join '', <$run_hs_pipe>;
+    my $exitval = $?;
 
-    subtest $message => sub
-    {
-        is( $?, 0, "exitval" );
-        is_deeply( [ split /\n/, $got ], [ split /\n/, $expect ], 'output' );
-    };
+    return ( $output, $exitval );
+}
+
+sub run_perl
+{
+    my ( $perl, $tmpdir ) = @_;
+
+    my $pl_fname = "$tmpdir/tap.t.pl";
+
+    open my $pl_fh, '>', $pl_fname
+      or do { fail( "could not open $pl_fname for writing: $!" ); return; };
+
+    $perl = <<PERL;
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Test::More;
+
+$perl
+PERL
+
+    print {$pl_fh} $perl;
+
+    close $pl_fh
+      or do { fail( "error closing $pl_fname: $!" ); return; };
+
+    open my $run_pl_pipe, '-|', 'bash', '-c', "perl $pl_fname 2>&1"
+      or do { fail( "can't open pipe 'perl $pl_fname'" ); return; };
+
+    my $output = join '', <$run_pl_pipe>;
+    my $exitval = $?;
+
+    $output =~ s/ at .* line \d+\.?//g;
+    $output =~ s/(^|\n)\s*\#\s*\n/$1/g;
+
+    return ( $output, $exitval );
 }

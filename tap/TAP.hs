@@ -1,3 +1,14 @@
+{-|
+
+Test Anything Protocol output which mirrors perl's
+  Because I'm an old man and set in my ways. Or something.
+
+TODO: 
+- Stack trace in failures
+- add subtest to metatap.t
+
+|-}
+
 module TAP (TAP.pass,TAP.fail,TAP.or,ok,cmp_ok,is,isnt,note,diag,plan,PlanType(NoPlan,Tests),done_testing,subtest,runTests) where
 
 import Control.Monad.RWS
@@ -73,7 +84,7 @@ runTestsEndCheckPlan = do
                        state <- get
                        case (testPlan state) of
                             Nothing -> do
-                                       diag "Tests were run but no plan was declared and done_testing() was not seen"
+                                       diag "Tests were run but no plan was declared and done_testing() was not seen."
                                        return True
                             Just NoPlan -> if (isDone state)
                                            then
@@ -89,7 +100,8 @@ runTestsEndCheckPlan = do
                                               else
                                                   do
                                                   diag $ "Looks like you planned " ++ 
-                                                         (show n) ++ " tests but ran " ++ 
+                                                         (show n) ++ " " ++
+                                                         (if n > 1 then "tests" else "test") ++ " but ran " ++ 
                                                          (show $ curTestNum state) ++ "."
                                                   return False
 
@@ -127,7 +139,9 @@ fail msg = do
            state <- get
            modify (\s -> s{failCount = (failCount state) + 1})
            tell [ ((output state), (indent state) ++ "not ok " ++ (show $ curTestNum state) ++ showMsg msg) ]
-           return False
+           case msg of
+                Just str -> do diag $ "  Failed test '" ++ (id str) ++ "'"; return False
+                Nothing -> do diag $ "  Failed test"; return False
        
 note :: String -> TestReturn
 note msg = do
@@ -188,10 +202,17 @@ done_testing = do
                if isDone state
                then
                    do
-                   TAP.fail $ Just "done_testing was already called"
+                   TAP.fail $ Just "done_testing() was already called"
                else
                    do
                    modify (\s -> s{isDone = True,testPlan=Just NoPlan})
                    tell [ ((output state), (indent state) ++ "1.." ++ (show $ curTestNum state) ) ]
-                   return True
+                   if curTestNum state < 1
+                   then
+                        do
+                        diag "No tests run!"
+                        return True
+                   else
+                        do
+                        return True
 
