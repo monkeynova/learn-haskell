@@ -154,6 +154,20 @@ fail;
 done_testing();
 PERL
 
+is_haskell_tap( <<HASKELL, <<PERL, 'subtest' );
+subtest (Just "subtest pass") (do pass Nothing)
+subtest (Just "subtest fail") (do TAP.fail Nothing)
+subtest (Just "subtest fail (with pass)") (do pass Nothing; TAP.fail Nothing)
+done_testing
+HASKELL
+subtest "subtest pass" => sub { pass };
+subtest "subtest fail" => sub { fail };
+subtest "subtest fail (with pass)" => sub { pass; fail };
+done_testing
+PERL
+
+
+
 done_testing();
 
 sub diagf { my $fmt = shift; diag( sprintf $fmt, @_ ) }
@@ -184,7 +198,9 @@ sub is_haskell_tap
                 for my $line ( 0 .. $linecount )
                 {
                     my $got_line = $got_lines[$line] // '';
+                    $got_line =~ s/^(\s+)/"_" x length( $1 )/e;
                     my $expect_line = $expect_lines[$line] // '';
+                    $expect_line =~ s/^(\s+)/"_" x length( $1 )/e;
                     diagf
                     (
                         $fmt,

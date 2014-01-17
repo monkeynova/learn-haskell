@@ -5,7 +5,7 @@ Test Anything Protocol output which mirrors perl's
 
 TODO: 
 - Stack trace in failures
-- add subtest to metatap.t
+- add subtest+plan to metatap.t
 
 |-}
 
@@ -61,8 +61,16 @@ runTests f = do
 runTestsEnd :: TestReturn
 runTestsEnd = do
               state <- get
-              runTestsEndCheckFail
               runTestsEndCheckPlan
+              runTestsEndCheckFail
+
+runTestsEndTestPlural :: Int -> String
+runTestsEndTestPlural n = if n > 1 then "tests" else "test"
+
+runTestsEndCheckFailAddRun :: TestState -> String
+runTestsEndCheckFailAddRun s = case testPlan s of
+                                    Just (Tests n) -> if n < curTestNum s then " run" else ""
+                                    _ -> ""
 
 runTestsEndCheckFail :: TestReturn
 runTestsEndCheckFail = do
@@ -72,8 +80,9 @@ runTestsEndCheckFail = do
                            do
                            diag $ "Looks like you failed " ++
                                   (show $ failCount state) ++ " " ++
-                                  (if failCount state > 1 then "tests" else "test")  ++ " of " ++ 
-                                  (show $ curTestNum state) ++ "."
+                                  (runTestsEndTestPlural $ failCount state)  ++ " of " ++ 
+                                  (show $ curTestNum state) ++ 
+                                  (runTestsEndCheckFailAddRun state) ++   "."
                            return False
                        else
                            do
@@ -101,7 +110,7 @@ runTestsEndCheckPlan = do
                                                   do
                                                   diag $ "Looks like you planned " ++ 
                                                          (show n) ++ " " ++
-                                                         (if n > 1 then "tests" else "test") ++ " but ran " ++ 
+                                                         (runTestsEndTestPlural n) ++ " but ran " ++ 
                                                          (show $ curTestNum state) ++ "."
                                                   return False
 
@@ -114,10 +123,19 @@ plan userPlan = do
                      NoPlan -> do return True
                 
 
+subtestState :: TestState -> TestState
+subtestState state = state{
+                        curTestNum=0,
+                        isDone=False,
+                        indent=((indent state) ++ "    "),
+                        testPlan=Just NoPlan,
+                        failCount=0
+                     }
+
 subtest :: Maybe String -> TestReturn -> TestReturn
 subtest subtest f = do
                     state <- get
-                    let (isOK,s,output) = runRWS (do f; runTestsEnd) () state{curTestNum=0,isDone=False,indent=((indent state) ++ "  "),testPlan=Just NoPlan,failCount=0}
+                    let (isOK,s,output) = runRWS (do f; runTestsEnd) () (subtestState state)
                     tell output
                     ok isOK subtest
 
@@ -140,7 +158,7 @@ fail msg = do
            modify (\s -> s{failCount = (failCount state) + 1})
            tell [ ((output state), (indent state) ++ "not ok " ++ (show $ curTestNum state) ++ showMsg msg) ]
            case msg of
-                Just str -> do diag $ "  Failed test '" ++ (id str) ++ "'"; return False
+                Just str -> do diag $ "  Failed test '" ++ str ++ "'"; return False
                 Nothing -> do diag $ "  Failed test"; return False
        
 note :: String -> TestReturn
@@ -205,7 +223,7 @@ done_testing = do
                    TAP.fail $ Just "done_testing() was already called"
                else
                    do
-                   modify (\s -> s{isDone = True,testPlan=Just NoPlan})
+                   modify (\s -> s{isDone = True,testPlan=Just (Tests $ curTestNum state)})
                    tell [ ((output state), (indent state) ++ "1.." ++ (show $ curTestNum state) ) ]
                    if curTestNum state < 1
                    then
