@@ -1,4 +1,4 @@
-module TAP (TAP.pass,TAP.fail,ok,cmp_ok,is,isnt,note,diag,plan,PlanType(NoPlan,Tests),done_testing,subtest,runTests) where
+module TAP (TAP.pass,TAP.fail,TAP.or,ok,cmp_ok,is,isnt,note,diag,plan,PlanType(NoPlan,Tests),done_testing,subtest,runTests) where
 
 import Control.Monad.RWS
 import GHC.IO.Handle
@@ -45,9 +45,7 @@ runTests f = do
              newout <- hDuplicate stdout
              newerr <- hDuplicate stderr
              let (isOK,s,output) = runRWS (do f; runTestsEnd) () defaultState{output=newout, failure_output=newerr}
-             mapM_ (\(h,s) -> hPutStrLn h s) output
-             hFlush newout
-             hFlush newerr
+             mapM_ (\(h,s) -> do hPutStrLn h s; hFlush h) output
 
 runTestsEnd :: TestReturn
 runTestsEnd = do
@@ -168,8 +166,8 @@ cmp_ok got cmp expect msg = ok (got `compare` expect == cmp) msg `TAP.or` do
 
 is :: (Eq a,Show a) => a -> a -> Maybe String -> TestReturn
 is got expect msg = ok (got == expect) msg `TAP.or` do
-                        diag $ "          got = '" ++ (show got) ++ "'"
-                        diag $ "     expected = '" ++ (show expect) ++ "'"
+                        diag $ "         got: '" ++ (show got) ++ "'"
+                        diag $ "    expected: '" ++ (show expect) ++ "'"
                         return False
 
 isnt :: (Eq a,Show a) => a -> a -> Maybe String -> TestReturn
@@ -180,8 +178,8 @@ isnt got expect msg = do
                       else    
                         do
                         TAP.fail msg
-                        diag $ "         got = '" ++ (show got) ++ "'"
-                        diag $ "    expected = anything else"
+                        diag $ "         got: '" ++ (show got) ++ "'"
+                        diag $ "    expected: anything else"
                         return False
 
 done_testing :: TestReturn

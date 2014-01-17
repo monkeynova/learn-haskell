@@ -39,6 +39,50 @@ not ok 2 - fail
 # Looks like you failed 1 test of 2.
 EXPECT
 
+is_haskell_tap( <<HASKELL, <<EXPECT, 'ok' );
+ok True \$ Just "pass"
+ok False \$ Just "fail"
+ok (1 == 1) Nothing
+done_testing
+HASKELL
+ok 1 - pass
+not ok 2 - fail
+ok 3
+1..3
+# Looks like you failed 1 test of 3.
+EXPECT
+
+is_haskell_tap( <<HASKELL, <<EXPECT, 'is/isnt' );
+TAP.is 1 1 \$ Just "is pass"
+TAP.is 1 2 \$ Just "is fail"
+TAP.isnt 1 2 \$ Just "isnt pass"
+TAP.isnt 1 1 \$ Just "isnt fail"
+done_testing
+HASKELL
+ok 1 - is pass
+not ok 2 - is fail
+#          got: '1'
+#     expected: '2'
+ok 3 - isnt pass
+not ok 4 - isnt fail
+#          got: '1'
+#     expected: anything else
+1..4
+# Looks like you failed 2 tests of 4.
+EXPECT
+
+is_haskell_tap( <<HASKELL, <<EXPECT, 'or' );
+TAP.pass (Just "pass") `TAP.or` do diag "pass diag"
+TAP.fail (Just "fail") `TAP.or` do diag "fail diag"
+done_testing
+HASKELL
+ok 1 - pass
+not ok 2 - fail
+# fail diag
+1..2
+# Looks like you failed 1 test of 2.
+EXPECT
+
 done_testing();
 
 sub is_haskell_tap
@@ -83,7 +127,9 @@ HASKELL
 
     my $got = join '', <$run_pipe>;
 
-    $? == 0 or diag( "$exe_fname exitval is $?" );
-
-    return is( $got, $expect, $message );
+    subtest $message => sub
+    {
+        is( $?, 0, "exitval" );
+        is_deeply( [ split /\n/, $got ], [ split /\n/, $expect ], 'output' );
+    };
 }
