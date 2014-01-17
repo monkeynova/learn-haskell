@@ -1,13 +1,22 @@
 module TAP (TAP.pass,TAP.fail,ok,cmp_ok,is,isnt,note,diag,plan,PlanType(NoPlan,Tests),done_testing,subtest,runTests) where
 
 import Control.Monad.RWS
+import GHC.IO.Handle
 import System.IO
 
 data PlanType = NoPlan | Tests Int
 
 type TestRead = ()
 type TestWrite = [(Handle,String)]
-data TestState = TestState { curTestNum :: Int, isDone :: Bool, indent :: String, testPlan :: Maybe PlanType, sawFail :: Bool }
+data TestState = TestState {
+     curTestNum :: Int,
+     isDone :: Bool,
+     indent :: String,
+     testPlan :: Maybe PlanType,
+     failCount :: Int,
+     output :: Handle,
+     failure_output :: Handle
+     }
 
 type TestReturn = RWS TestRead TestWrite TestState Bool
 
@@ -20,48 +29,85 @@ or definitely maybe = do
                       else
                           maybe
 
+defaultState :: TestState
+defaultState = TestState{
+               curTestNum=0,
+               isDone=False,
+               indent="",
+               testPlan=Nothing,
+               failCount=0,
+               output=stdout,
+               failure_output=stderr
+             }
+
 runTests :: TestReturn -> IO ()
 runTests f = do
-             let (isOK,s,output) = runRWS (do f; runTestsEnd) () TestState{curTestNum=0, isDone=False, indent="", testPlan=Nothing, sawFail=False}
+             newout <- hDuplicate stdout
+             newerr <- hDuplicate stderr
+             let (isOK,s,output) = runRWS (do f; runTestsEnd) () defaultState{output=newout, failure_output=newerr}
              mapM_ (\(h,s) -> hPutStrLn h s) output
+             hFlush newout
+             hFlush newerr
 
 runTestsEnd :: TestReturn
 runTestsEnd = do
               state <- get
-              case (testPlan state) of
-                   Nothing -> do
-                              diag "Tests were run but no plan was declared and done_testing() was not seen"
-                              return True
-                   Just NoPlan -> if (isDone state)
-                                  then
-                                      do
-                                      return True
-                                  else
-                                      do
-                                      done_testing
-                   Just (Tests n) -> if n == (curTestNum state)
-                                     then
-                                         do
-                                         return True
-                                     else
-                                         do
-                                         modify (\s -> s{sawFail = True})
-                                         diag $ "Looks like you planned " ++ (show n) ++ " tests but ran " ++ (show $ curTestNum state) ++ "."
-                                         return False
+              runTestsEndCheckFail
+              runTestsEndCheckPlan
+
+runTestsEndCheckFail :: TestReturn
+runTestsEndCheckFail = do
+                       state <- get
+                       if (failCount state) > 0
+                       then
+                           do
+                           diag $ "Looks like you failed " ++
+                                  (show $ failCount state) ++ " " ++
+                                  (if failCount state > 1 then "tests" else "test")  ++ " of " ++ 
+                                  (show $ curTestNum state) ++ "."
+                           return False
+                       else
+                           do
+                           return True
+
+runTestsEndCheckPlan :: TestReturn
+runTestsEndCheckPlan = do
+                       state <- get
+                       case (testPlan state) of
+                            Nothing -> do
+                                       diag "Tests were run but no plan was declared and done_testing() was not seen"
+                                       return True
+                            Just NoPlan -> if (isDone state)
+                                           then
+                                               do
+                                               return True
+                                           else
+                                               do
+                                               done_testing
+                            Just (Tests n) -> if n == (curTestNum state)
+                                              then
+                                                  do
+                                                  return True
+                                              else
+                                                  do
+                                                  diag $ "Looks like you planned " ++ 
+                                                         (show n) ++ " tests but ran " ++ 
+                                                         (show $ curTestNum state) ++ "."
+                                                  return False
 
 plan :: PlanType -> TestReturn
 plan userPlan = do
                 state <- get
                 modify (\s -> s{testPlan = Just userPlan})
                 case userPlan of
-                     Tests count -> do tell [ (stdout, (indent state) ++ "1.." ++ (show count)) ]; return True
+                     Tests count -> do tell [ ((output state), (indent state) ++ "1.." ++ (show count)) ]; return True
                      NoPlan -> do return True
                 
 
 subtest :: Maybe String -> TestReturn -> TestReturn
 subtest subtest f = do
                     state <- get
-                    let (isOK,s,output) = runRWS (do f; runTestsEnd) () state{curTestNum=0,isDone=False,indent=((indent state) ++ "  "),testPlan=Just NoPlan,sawFail=False}
+                    let (isOK,s,output) = runRWS (do f; runTestsEnd) () state{curTestNum=0,isDone=False,indent=((indent state) ++ "  "),testPlan=Just NoPlan,failCount=0}
                     tell output
                     ok isOK subtest
 
@@ -74,27 +120,29 @@ pass :: Maybe String -> TestReturn
 pass msg = do 
            modify nextTest
            state <- get
-           tell [ (stdout, (indent state) ++ "ok " ++ (show $ curTestNum state) ++ showMsg msg) ]
+           tell [ ((output state), (indent state) ++ "ok " ++ (show $ curTestNum state) ++ showMsg msg) ]
            return True
 
 fail :: Maybe String -> TestReturn
 fail msg = do 
            modify nextTest
            state <- get
-           modify (\s -> s{sawFail = True})
-           tell [ (stdout, (indent state) ++ "not ok " ++ (show $ curTestNum state) ++ showMsg msg) ]
+           modify (\s -> s{failCount = (failCount state) + 1})
+           tell [ ((output state), (indent state) ++ "not ok " ++ (show $ curTestNum state) ++ showMsg msg) ]
            return False
        
 note :: String -> TestReturn
 note msg = do
            state <- get
-           tell [ (stdout, (indent state) ++ "# " ++ msg) ]
+           let prefix = (indent state) ++ "# "
+           tell [ ((output state), prefix ++ msg) ]
            return True
 
 diag :: String -> TestReturn
 diag msg = do
            state <- get
-           tell [ (stderr, (indent state) ++ "# " ++ msg) ]
+           let prefix = (indent state) ++ "# "
+           tell [ ((failure_output state), prefix ++ msg) ] 
            return True
 
 ok :: Bool -> Maybe String -> TestReturn
@@ -145,7 +193,7 @@ done_testing = do
                    TAP.fail $ Just "done_testing was already called"
                else
                    do
-                   modify (\s -> s{isDone = True})
-                   tell [ (stdout, (indent state) ++ "1.." ++ (show $ curTestNum state) ) ]
+                   modify (\s -> s{isDone = True,testPlan=Just NoPlan})
+                   tell [ ((output state), (indent state) ++ "1.." ++ (show $ curTestNum state) ) ]
                    return True
 

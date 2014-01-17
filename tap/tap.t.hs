@@ -3,7 +3,6 @@ module Main where
 import TAP
 
 mainTests = do
-            plan $ Tests 1
             TAP.pass $ Just "Bar"
             TAP.pass Nothing
             TAP.fail $ Just "test failure"
